@@ -20,11 +20,19 @@ final class OffersExportRequest
     {
         $prefix = $task->payload['prefix'] ?? '/retailer';
 
+        $options = [
+            'json' => ['format' => 'CSV'],
+            'headers' => [
+                'Accept' => 'application/vnd.retailer.v10+json',
+                'Content-Type' => 'application/vnd.retailer.v10+json',
+            ],
+        ];
+
         $log->info('Requesting offer export');
         $res = $this->bol->request(
             'POST',
             "{$prefix}/offers/export",
-            ['prefix' => $prefix, 'json' => ['format' => 'CSV']],
+            $options
         );
         $data = json_decode((string) $res->getBody(), true);
         $processId = $data['processStatusId'] ?? null;
@@ -35,14 +43,14 @@ final class OffersExportRequest
 
         $log->info('Offer export requested', ['processStatusId' => $processId]);
 
-        $pollPrefix = str_replace('retailer','shared',$prefix);
+        $pollPrefix = str_replace('retailer', 'shared', $prefix);
 
         $this->queue->enqueue('bol.request', [
             'action' => 'offers.export.poll',
             'processStatusId' => $processId,
             'prefix' => $pollPrefix
         ]);
-        
+
         return "Export request submitted with processStatusId: {$processId}";
     }
 }

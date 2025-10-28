@@ -43,36 +43,33 @@ final class FileQueue implements QueueInterface
     public function reserve(): ?Task
     {
         $files = glob($this->pending . '/*.json');
-        if (!$files) {
+        if (!$files)
             return null;
-        }
-        // pick the oldest file
         usort($files, static fn($a, $b) => filemtime($a) <=> filemtime($b));
-        $src = $files[0];
-        $id = basename($src, '.json');
-        $dst = "{$this->processing}/{$id}.json";
 
-        // atomic move to lock
-        if (!@rename($src, $dst)) {
-            return null; // another worker took it
+        foreach ($files as $src) {
+            $row = json_decode((string) file_get_contents($src), true);
+            if (isset($row['nextAt']) && $row['nextAt'] > time()) {
+                continue;
+            }
+            $id = basename($src, '.json');
+            $dst = "{$this->processing}/{$id}.json";
+            if (@rename($src, $dst)) {
+                $d = json_decode((string) file_get_contents($dst), true);
+                return new Task($d['id'], $d['type'], $d['payload'], (int) ($d['attempts'] ?? 0), (int) ($d['createdAt'] ?? time()));
+            }
         }
-        $data = json_decode((string)file_get_contents($dst), true, 512, JSON_THROW_ON_ERROR);
-        
-        // Increment attempts and update the processing file
-        $data['attempts'] = ($data['attempts'] ?? 0) + 1;
-        file_put_contents($dst, json_encode($data, JSON_THROW_ON_ERROR));
-        
-        return new Task($data['id'], $data['type'], $data['payload'], $data['attempts'], $data['createdAt'] ?? time());
+        return null;
     }
 
     public function ack(Task $task, ?string $info = null): void
     {
         $from = "{$this->processing}/{$task->id}.json";
         $to = "{$this->done}/{$task->id}.json";
-        
+
         if ($info !== null) {
             // Read the processing file to get existing data and add info
-            $data = json_decode((string)file_get_contents($from), true, 512, JSON_THROW_ON_ERROR);
+            $data = json_decode((string) file_get_contents($from), true, 512, JSON_THROW_ON_ERROR);
             $data['info'] = $info;
             $data['completedAt'] = time();
             file_put_contents($to, json_encode($data, JSON_THROW_ON_ERROR));
@@ -95,6 +92,13 @@ final class FileQueue implements QueueInterface
             'failedAt' => time(),
         ];
         if ($requeue) {
+            $nextAt = time();
+            $base = (int) ($_ENV['QUEUE_BACKOFF_BASE'] ?? 5);
+            $cap = (int) ($_ENV['QUEUE_BACKOFF_CAP'] ?? 300);
+            $delay = (int) min($cap, $base * (2 ** max(0, $task->attempts - 1)));
+            $nextAt += $delay;
+
+            $data['nextAt'] = $nextAt;
             file_put_contents("{$this->pending}/{$task->id}.json", json_encode($data, JSON_THROW_ON_ERROR));
             @unlink($from);
         } else {

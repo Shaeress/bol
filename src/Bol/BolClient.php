@@ -29,20 +29,10 @@ final class BolClient
     public function request(string $method, string $path, array $options = []): \Psr\Http\Message\ResponseInterface
     {
         $token = $this->getAccessToken();
-
         
         $headers = [            
             'Authorization' => 'Bearer ' . $token,
-        ];
-
-        if ($method === 'POST') {
-            $headers['Accept'] = 'application/vnd.retailer.v10+json';
-            $headers['Content-Type'] = 'application/vnd.retailer.v10+json';
-        }
-
-        if (!empty($options['json'])) {
-            $headers['Content-Type'] = 'application/vnd.retailer.v10+json';
-        }
+        ];        
 
         $opts = $options + ['headers' => ($options['headers'] ?? []) + $headers];
 

@@ -24,7 +24,13 @@ final class OffersExportPoll
 
         $prefix = $task->payload['prefix'] ?? '/retailer';
 
-        $res = $this->bol->request('GET', "{$prefix}/process-status/{$processId}");
+        $options = [
+            'headers' => [
+                'Accept' => 'application/vnd.shared.v10+json',
+            ],
+        ];
+
+        $res = $this->bol->request('GET', "{$prefix}/process-status/{$processId}", $options);
         $data = json_decode((string)$res->getBody(), true);
         $status = $data['status'] ?? 'UNKNOWN';
 

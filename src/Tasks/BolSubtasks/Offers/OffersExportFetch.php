@@ -18,7 +18,7 @@ final class OffersExportFetch
             throw new \RuntimeException('Missing reportId');
         }
 
-        $prefix = $task->payload['prefix'] ?? '/retailer';
+        $prefix = $task->payload['prefix'] ?? '/retailer';       
 
         $res = $this->bol->request('GET', "{$prefix}/offers/export/{$reportId}");
         $csv = (string)$res->getBody();

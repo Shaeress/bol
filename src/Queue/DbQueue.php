@@ -74,20 +74,36 @@ final class DbQueue implements QueueInterface
 
 	public function nack(Task $task, string $reason, bool $requeue = false): void
 	{
-		if ($requeue) {
+		$attempts = $task->attempts;
+		$max = (int) ($_ENV['QUEUE_MAX_ATTEMPTS'] ?? 5);
+
+		if ($attempts >= $max) {
 			$stmt = $this->pdo->prepare(
 				'UPDATE queue_tasks
-                 SET status = "pending", reserved_at = NULL, worker_token = NULL, error = ?
-                 WHERE id = ?'
+             SET status = "failed",
+                 reserved_at = NULL,
+                 worker_token = NULL,
+                 error = ?
+             WHERE id = ?'
 			);
 			$stmt->execute([$reason, $task->id]);
-		} else {
-			$stmt = $this->pdo->prepare(
-				'UPDATE queue_tasks
-                 SET status = "failed", error = ?
-                 WHERE id = ?'
-			);
-			$stmt->execute([$reason, $task->id]);
+			return;
 		}
+
+		$base = max(1, (int) ($_ENV['QUEUE_BACKOFF_BASE'] ?? 5));
+		$cap = max($base, (int) ($_ENV['QUEUE_BACKOFF_CAP'] ?? 300));
+		$delay = (int) min($cap, $base * (2 ** max(0, $attempts - 1)));
+
+		$stmt = $this->pdo->prepare(
+			'UPDATE queue_tasks
+         SET status = "pending",
+             reserved_at = NULL,
+             worker_token = NULL,
+             available_at = DATE_ADD(NOW(), INTERVAL ? SECOND),
+             error = ?
+         WHERE id = ?'
+		);
+		$stmt->execute([$delay, $reason, $task->id]);
 	}
+
 }

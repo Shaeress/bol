@@ -1,0 +1,5 @@
+/vendor/
+/var/log/
+/var/queue/
+/.php-cs-fixer.cache
+/phpunit.xml.cache

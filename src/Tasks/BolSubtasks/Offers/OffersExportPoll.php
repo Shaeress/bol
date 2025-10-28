@@ -26,7 +26,7 @@ final class OffersExportPoll
 
         $options = [
             'headers' => [
-                'Accept' => 'application/vnd.shared.v10+json',
+                'Accept' => 'application/vnd.retailer.v10+json',
             ],
         ];
 

@@ -18,9 +18,15 @@ final class OffersExportFetch
             throw new \RuntimeException('Missing reportId');
         }
 
-        $prefix = $task->payload['prefix'] ?? '/retailer';       
+        $prefix = $task->payload['prefix'] ?? '/retailer';      
+        
+        $options = [
+            'headers' => [
+                'Accept' => 'application/vnd.retailer.v10+csv',
+            ],
+        ];
 
-        $res = $this->bol->request('GET', "{$prefix}/offers/export/{$reportId}");
+        $res = $this->bol->request('GET', "{$prefix}/offers/export/{$reportId}", $options);
         $csv = (string)$res->getBody();
 
         $dir = __DIR__ . '/../../../../var/export/offers';

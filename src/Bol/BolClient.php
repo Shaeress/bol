@@ -29,18 +29,30 @@ final class BolClient
     public function request(string $method, string $path, array $options = []): \Psr\Http\Message\ResponseInterface
     {
         $token = $this->getAccessToken();
-        
-        $headers = [            
-            'Authorization' => 'Bearer ' . $token,
-        ];        
 
-        $opts = $options + ['headers' => ($options['headers'] ?? []) + $headers];
+        if (array_key_exists('json', $options) && $options['json'] === null) {
+            unset($options['json']);
+        }
+        $baseHeaders = [
+            'Authorization' => 'Bearer ' . $token,
+        ];
+
+        $callerHeaders = $options['headers'] ?? [];
+        $finalHeaders = $callerHeaders + $baseHeaders;
+
+        foreach ($finalHeaders as $k => $v) {
+            if ($v === null)
+                unset($finalHeaders[$k]);
+        }
+
+        $opts = $options;
+        $opts['headers'] = $finalHeaders;
 
         if ($this->logger) {
             $this->logger->debug('BOL request', [
                 'method' => $method,
                 'url' => $this->apiBase . $path,
-                'headers' => $headers,
+                'headers' => $finalHeaders,
                 'has_json' => array_key_exists('json', $options),
                 'json' => $options['json'] ?? null,
             ]);

@@ -22,6 +22,13 @@ final class BolRequestHandler implements TaskHandler
         $this->register('offers.export.request', new \App\Tasks\BolSubtasks\Offers\OffersExportRequest($this->bol, $this->queue));
         $this->register('offers.export.poll', new \App\Tasks\BolSubtasks\Offers\OffersExportPoll($this->bol, $this->queue));
         $this->register('offers.export.fetch', new \App\Tasks\BolSubtasks\Offers\OffersExportFetch($this->bol));
+        $this->register('offer.create', new \App\Tasks\BolSubtasks\Offer\OfferCreateRequest($this->bol, $this->queue));
+        $this->register('offer.create.store', new \App\Tasks\BolSubtasks\Offer\OfferCreateStore());
+        $this->register('offer.update.core', new \App\Tasks\BolSubtasks\Offer\OfferUpdateCore($this->bol, $this->queue));
+        $this->register('offer.update.price', new \App\Tasks\BolSubtasks\Offer\OfferUpdatePrice($this->bol, $this->queue));
+        $this->register('offer.update.stock', new \App\Tasks\BolSubtasks\Offer\OfferUpdateStock($this->bol, $this->queue));
+        $this->register('offer.upsert', new \App\Tasks\BolSubtasks\Offer\OfferUpsert($this->queue));
+        $this->register('offer.map.touch', new \App\Tasks\BolSubtasks\Offer\OfferMapTouch());
     }
 
     public function register(string $name, object $handler): void

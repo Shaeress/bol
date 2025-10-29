@@ -10,6 +10,7 @@ final class Task
         public string $type,
         public array $payload,
         public int $attempts = 0,
-        public int $createdAt = 0
+        public int $createdAt = 0,
+        public int $concurrentCount = 0
     ) {}
 }

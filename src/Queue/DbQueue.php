@@ -11,13 +11,22 @@ final class DbQueue implements QueueInterface
 	{
 	}
 
-	public function enqueue(string $type, array $payload): string
+	public function enqueue(string $type, array $payload, int $delaySeconds = 0): string
 	{
 		$id = bin2hex(random_bytes(8));
-		$stmt = $this->pdo->prepare(
-			'INSERT INTO queue_tasks (id, type, payload, status) VALUES (?, ?, CAST(? AS JSON), "pending")'
-		);
-		$stmt->execute([$id, $type, json_encode($payload, JSON_THROW_ON_ERROR)]);
+		if ($delaySeconds > 0) {
+			$stmt = $this->pdo->prepare(
+				'INSERT INTO queue_tasks (id, type, payload, status, available_at) 
+				 VALUES (?, ?, CAST(? AS JSON), "pending", DATE_ADD(NOW(), INTERVAL ? SECOND))'
+			);
+			$stmt->execute([$id, $type, json_encode($payload, JSON_THROW_ON_ERROR), $delaySeconds]);
+		} else {
+			$stmt = $this->pdo->prepare(
+				'INSERT INTO queue_tasks (id, type, payload, status, available_at) 
+				 VALUES (?, ?, CAST(? AS JSON), "pending", NOW())'
+			);
+			$stmt->execute([$id, $type, json_encode($payload, JSON_THROW_ON_ERROR)]);
+		}
 		return $id;
 	}
 
@@ -30,10 +39,10 @@ final class DbQueue implements QueueInterface
 		$upd = $this->pdo->prepare(
 			'UPDATE queue_tasks q
 			 JOIN (
-			     SELECT id
-			     FROM queue_tasks
-			     WHERE status = "pending" AND available_at <= NOW()
-			     ORDER BY created_at ASC
+			     SELECT id, type, payload
+			     FROM queue_tasks pending
+			     WHERE pending.status = "pending" AND pending.available_at <= NOW()
+			     ORDER BY pending.created_at ASC
 			     LIMIT 1
 			 ) pick ON pick.id = q.id
 			 SET q.status = "processing",
@@ -56,14 +65,39 @@ final class DbQueue implements QueueInterface
 		);
 		$sel->execute([$token]);
 		$row = $sel->fetch();
-		$this->pdo->commit();
-
+		
 		if (!$row) {
+			$this->pdo->commit();
 			return null;
 		}
 
+		// Count how many other tasks of the same type and action are currently processing
 		$payload = json_decode($row['payload'], true, 512, JSON_THROW_ON_ERROR);
-		return new Task($row['id'], $row['type'], $payload, (int) $row['attempts'], (int) $row['created_ts']);
+		$action = $payload['action'] ?? null;
+		$concurrentCount = 0;
+		
+		if ($action) {
+			$countStmt = $this->pdo->prepare(
+				'SELECT COUNT(*) FROM queue_tasks 
+				 WHERE status = "processing" 
+				 AND type = ? 
+				 AND JSON_EXTRACT(payload, "$.action") = ?
+				 AND id != ?'
+			);
+			$countStmt->execute([$row['type'], $action, $row['id']]);
+			$concurrentCount = (int)$countStmt->fetchColumn();
+		}
+		
+		$this->pdo->commit();
+
+		return new Task(
+			$row['id'], 
+			$row['type'], 
+			$payload, 
+			(int) $row['attempts'], 
+			(int) $row['created_ts'],
+			$concurrentCount
+		);
 	}
 
 	public function ack(Task $task, ?string $info = null): void

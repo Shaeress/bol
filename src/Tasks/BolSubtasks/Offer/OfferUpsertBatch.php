@@ -6,21 +6,23 @@ namespace App\Tasks\BolSubtasks\Offer;
 use App\Bol\BolClient;
 use App\DB\PdoFactory;
 use App\Mappers\OfferMapper;
+use App\Queue\QueueInterface;
 use App\Queue\Task;
 use Psr\Log\LoggerInterface;
 use PDO;
 
 final class OfferUpsertBatch
 {
-    public function __construct(private BolClient $bol) {}
+    public function __construct(private BolClient $bol, private QueueInterface $queue) {}
 
-    public function handle(Task $task, LoggerInterface $log): void
+    public function handle(Task $task, LoggerInterface $log): ?string
     {
         $eans   = $task->payload['eans']   ?? [];
         $prefix = $task->payload['prefix'] ?? '/retailer';
         if (empty($eans)) throw new \RuntimeException('Missing eans');
 
         $pdo = PdoFactory::make();
+        $batchSize = count($eans);
 
         foreach ($eans as $ean) {
             try {
@@ -32,6 +34,20 @@ final class OfferUpsertBatch
                 // continue with next EAN
             }
         }
+
+        // Enqueue process status check with 2-minute delay
+        $this->queue->enqueue('bol.request', [
+            'action' => 'process.status.check',
+            'batch_size' => $batchSize,
+            'prefix' => str_replace('retailer', 'shared', $prefix),
+        ], 120); // 2 minutes delay
+        
+        $log->info('Enqueued process status check', [
+            'batch_size' => $batchSize,
+            'delay_seconds' => 120
+        ]);
+
+        return "Processed {$batchSize} EANs and enqueued process status check";
     }
 
     private function upsertOne(PDO $pdo, string $ean, string $prefix, LoggerInterface $log): void
@@ -54,11 +70,13 @@ final class OfferUpsertBatch
         if (!$map || !$map['offer_id']) {
             try {
                 // create and wait inline
-                $pid = $this->callCreate($prefix, $offerPayload, $ean, $pdo, $log);
+                $createResponse = $this->callCreate($prefix, $offerPayload, $ean, $pdo, $log);
+                $pid = $createResponse['processStatusId'] ?? null;
+                if (!$pid) {
+                    $responseDebug = json_encode($createResponse);
+                    throw new \RuntimeException("No processStatusId returned on create for {$ean}. Response: {$responseDebug}");
+                }
                 $this->queueProcessId($pdo, $pid, $ean, 'create');
-                $offerId = $res['entityId'] ?? null;
-                if (!$offerId) throw new \RuntimeException('No offerId returned on create for ' . $ean);
-                $this->storeMap($pdo, $ean, $offerId);
                 $map = $this->fetchMap($pdo, $ean); // reload
             } catch (\RuntimeException $e) {
                 $msg = $e->getMessage();
@@ -182,7 +200,7 @@ final class OfferUpsertBatch
         $st->execute([$stock, $ean]);
     }
 
-    private function callCreate(string $prefix, array $payload, string $ean, PDO $pdo, LoggerInterface $log): string
+    private function callCreate(string $prefix, array $payload, string $ean, PDO $pdo, LoggerInterface $log): array
     {
         try {
             $res = $this->bol->request('POST', "{$prefix}/offers", [
@@ -193,9 +211,10 @@ final class OfferUpsertBatch
                 'json' => $payload,
             ]);
             $data = json_decode((string)$res->getBody(), true);
-            $pid = $data['processStatusId'] ?? null;
-            if (!$pid) throw new \RuntimeException('No processStatusId on create');
-            return (string)$pid;
+            if (!is_array($data)) {
+                throw new \RuntimeException('Invalid JSON response from BOL API');
+            }
+            return $data;
         } catch (\RuntimeException $e) {
             // Pass through to duplicate-offer handler above
             throw $e;

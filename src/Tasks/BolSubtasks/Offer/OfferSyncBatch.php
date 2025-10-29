@@ -28,6 +28,9 @@ final class OfferSyncBatch
 
 		$pdo = PdoFactory::make();
 
+		// Calculate offset based on concurrent tasks to avoid overlapping data
+		$offset = $task->concurrentCount * $limit;
+
 		// Prepare the placeholders for IN clauses
 		$brandPlaceholders = implode(',', array_fill(0, count($brands), '?'));
 		$seasonPlaceholders = implode(',', array_fill(0, count($seasons), '?'));
@@ -44,7 +47,7 @@ final class OfferSyncBatch
 			  cs.last_synced_at ASC,
 			  cs.retry_count ASC,
 			  s.ean ASC
-			LIMIT $limit
+			LIMIT $limit OFFSET $offset
 		";
 
 		$stmt = $pdo->prepare($sql);
@@ -52,7 +55,12 @@ final class OfferSyncBatch
 		$rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 		if (!$rows) {
-			$log->info('No offers found to sync', ['brands' => $brands, 'seasons' => $seasons]);
+			$log->info('No offers found to sync', [
+				'brands' => $brands, 
+				'seasons' => $seasons, 
+				'offset' => $offset,
+				'concurrent_count' => $task->concurrentCount
+			]);
 			return;
 		}
 
@@ -68,6 +76,10 @@ final class OfferSyncBatch
 			'prefix' => $prefix,
 		]);
 
-		$log->info('Queued upsert batch', ['count' => count($eans)]);
+		$log->info('Queued upsert batch', [
+			'count' => count($eans), 
+			'offset' => $offset,
+			'concurrent_count' => $task->concurrentCount
+		]);
 	}
 }

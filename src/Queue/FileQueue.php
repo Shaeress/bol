@@ -25,7 +25,7 @@ final class FileQueue implements QueueInterface
         }
     }
 
-    public function enqueue(string $type, array $payload): string
+    public function enqueue(string $type, array $payload, int $delaySeconds = 0): string
     {
         $id = bin2hex(random_bytes(8));
         $file = "{$this->pending}/{$id}.json";
@@ -35,6 +35,7 @@ final class FileQueue implements QueueInterface
             'payload' => $payload,
             'attempts' => 0,
             'createdAt' => time(),
+            'availableAt' => time() + $delaySeconds,
         ];
         file_put_contents($file, json_encode($data, JSON_THROW_ON_ERROR));
         return $id;
@@ -43,21 +44,44 @@ final class FileQueue implements QueueInterface
     public function reserve(): ?Task
     {
         $files = glob($this->pending . '/*.json');
-        if (!$files)
+        if (!$files) {
             return null;
+        }
+        // pick the oldest file
         usort($files, static fn($a, $b) => filemtime($a) <=> filemtime($b));
-
+        
         foreach ($files as $src) {
-            $row = json_decode((string) file_get_contents($src), true);
-            if (isset($row['nextAt']) && $row['nextAt'] > time()) {
-                continue;
+            $data = json_decode((string)file_get_contents($src), true, 512, JSON_THROW_ON_ERROR);
+            
+            // Check if task is available (respect delay)
+            $availableAt = $data['availableAt'] ?? time();
+            if ($availableAt > time()) {
+                continue; // Skip this task, it's not ready yet
             }
+            
             $id = basename($src, '.json');
             $dst = "{$this->processing}/{$id}.json";
-            if (@rename($src, $dst)) {
-                $d = json_decode((string) file_get_contents($dst), true);
-                return new Task($d['id'], $d['type'], $d['payload'], (int) ($d['attempts'] ?? 0), (int) ($d['createdAt'] ?? time()));
+
+            // atomic move to lock
+            if (!@rename($src, $dst)) {
+                continue; // another worker took it
             }
+            
+            // Increment attempts and update the processing file
+            $data['attempts'] = ($data['attempts'] ?? 0) + 1;
+            file_put_contents($dst, json_encode($data, JSON_THROW_ON_ERROR));
+            
+            // Count concurrent tasks with same type and action
+            $concurrentCount = $this->countConcurrentTasks($data['type'], $data['payload'], $id);
+            
+            return new Task(
+                $data['id'], 
+                $data['type'], 
+                $data['payload'], 
+                (int)$data['attempts'], 
+                (int)($data['createdAt'] ?? time()),
+                $concurrentCount
+            );
         }
         return null;
     }
@@ -105,5 +129,38 @@ final class FileQueue implements QueueInterface
             file_put_contents("{$this->failed}/{$task->id}.json", json_encode($data, JSON_THROW_ON_ERROR));
             @unlink($from);
         }
+    }
+
+    private function countConcurrentTasks(string $type, array $payload, string $excludeId): int
+    {
+        $processingFiles = glob($this->processing . '/*.json');
+        if (!$processingFiles) {
+            return 0;
+        }
+        
+        $action = $payload['action'] ?? null;
+        if (!$action) {
+            return 0; // No action to compare
+        }
+        
+        $count = 0;
+        foreach ($processingFiles as $file) {
+            $fileId = basename($file, '.json');
+            if ($fileId === $excludeId) {
+                continue; // Don't count ourselves
+            }
+            
+            $data = json_decode((string)file_get_contents($file), true, 512, JSON_THROW_ON_ERROR);
+            
+            // Check if same type and same action
+            if ($data['type'] === $type) {
+                $processingAction = $data['payload']['action'] ?? null;
+                if ($processingAction === $action) {
+                    $count++;
+                }
+            }
+        }
+        
+        return $count;
     }
 }

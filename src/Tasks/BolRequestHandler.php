@@ -32,9 +32,8 @@ final class BolRequestHandler implements TaskHandler
         $this->register('offer.sync.batch', new \App\Tasks\BolSubtasks\Offer\OfferSyncBatch($this->queue));
         $this->register('offer.sync.success', new \App\Tasks\BolSubtasks\Offer\OfferSyncSuccess());
         $this->register('offer.sync.error', new \App\Tasks\BolSubtasks\Offer\OfferSyncError());
-        $this->register('offer.upsert.batch', new \App\Tasks\BolSubtasks\Offer\OfferUpsertBatch($this->bol));
-
-
+        $this->register('offer.upsert.batch', new \App\Tasks\BolSubtasks\Offer\OfferUpsertBatch($this->bol, $this->queue));
+        $this->register('process.status.check', new \App\Tasks\BolSubtasks\Process\ProcessStatusCheck($this->bol, $this->queue));
     }
 
     public function register(string $name, object $handler): void

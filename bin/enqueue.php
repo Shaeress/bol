@@ -20,9 +20,7 @@ $q = $driver === 'db' ? new DbQueue(PdoFactory::make())
 
 // pick an endpoint you can call with your role, for example process status list or orders
 $id = $q->enqueue('bol.request', [
-  'action' => 'offer.upsert',
-  'ean'    => '8712345678901',
-  'prefix' => '/retailer', // or '/retailer-demo' during testing
+    'action' => 'offer.sync.batch'
 ]);
 
 echo "Enqueued bol.request {$id}\n";

@@ -39,11 +39,21 @@ final class ProcessPoll
 				if (!empty($data['entityId'])) {
 					$onSuccess['offerId'] = $data['entityId'];
 				}
+
+				if (!isset($onSuccess['ean']) && isset($task->payload['ean'])) {
+					$onSuccess['ean'] = $task->payload['ean'];
+				}
+
 				$this->queue->enqueue('bol.request', $onSuccess);
+				if (isset($task->payload['ean'])) {
+					$this->queue->enqueue('bol.request', [
+						'action' => 'offer.sync.success',
+						'ean' => $task->payload['ean'],
+					]);
+				}
 			}
 			return;
 		}
-
 
 		if ($status === 'PENDING' || $status === 'IN_PROGRESS') {
 			sleep(2);
@@ -51,9 +61,25 @@ final class ProcessPoll
 			return;
 		}
 
-		// FAILURE etc: optionally enqueue onFailure
 		if (!empty($task->payload['onFailure'])) {
 			$this->queue->enqueue('bol.request', $task->payload['onFailure'] + ['status' => $status]);
+		}
+
+		// If this process failed and relates to an offer, mark sync as error
+		if (in_array($status, ['FAILURE', 'TIMEOUT', 'CANCELLED', 'ERROR', 'UNKNOWN'], true)) {
+			if (isset($task->payload['ean'])) {
+				$detail = $data['errorDescription'] ?? $data['errorMessage'] ?? 'Process failed with status ' . $status;
+				$this->queue->enqueue('bol.request', [
+					'action' => 'offer.sync.error',
+					'ean' => $task->payload['ean'],
+					'error' => $detail,
+				]);
+			}
+			$log->warning('Process failed', [
+				'id' => $id,
+				'status' => $status,
+				'ean' => $task->payload['ean'] ?? null,
+			]);
 		}
 	}
 }

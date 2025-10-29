@@ -10,19 +10,26 @@ final class OfferMapper
         $price = (float)$row['price'];
         $stock = max(0, (int)$row['stock']);
         $deliveryCode = $row['delivery_code'] ?? '1-8d';
+        $onHoldByRetailer = $row['on_hold_by_retailer'] ?? ($stock <= 0);
+        if (!$onHoldByRetailer && $stock <= 0) {
+            $onHoldByRetailer = true;
+        }
 
         return [
             'ean' => $row['ean'],
             'condition' => ['name' => 'NEW'],
-            'onHoldByRetailer' => $stock <= 0,
-            'fulfilment' => ['deliveryCode' => $deliveryCode],
+            'onHoldByRetailer' => $onHoldByRetailer,
+            'fulfilment' => [
+                'method' => 'FBR',
+                'deliveryCode' => $deliveryCode
+            ],
             'pricing' => [
                 'bundlePrices' => [[
                     'quantity' => 1,
-                    'price' => $price,
+                    'unitPrice' => $price,
                 ]]
             ],
-            'stock' => ['amount' => $stock],
+            'stock' => ['amount' => $stock, 'managedByRetailer' => true],
         ];
     }
 }

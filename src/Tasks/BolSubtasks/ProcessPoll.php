@@ -45,12 +45,6 @@ final class ProcessPoll
 				}
 
 				$this->queue->enqueue('bol.request', $onSuccess);
-				if (isset($task->payload['ean'])) {
-					$this->queue->enqueue('bol.request', [
-						'action' => 'offer.sync.success',
-						'ean' => $task->payload['ean'],
-					]);
-				}
 			}
 			return;
 		}
@@ -69,11 +63,7 @@ final class ProcessPoll
 		if (in_array($status, ['FAILURE', 'TIMEOUT', 'CANCELLED', 'ERROR', 'UNKNOWN'], true)) {
 			if (isset($task->payload['ean'])) {
 				$detail = $data['errorDescription'] ?? $data['errorMessage'] ?? 'Process failed with status ' . $status;
-				$this->queue->enqueue('bol.request', [
-					'action' => 'offer.sync.error',
-					'ean' => $task->payload['ean'],
-					'error' => $detail,
-				]);
+				\App\Support\SyncTracker::markError($task->payload['ean'], $detail);
 			}
 			$log->warning('Process failed', [
 				'id' => $id,

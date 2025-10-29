@@ -27,7 +27,11 @@ final class OfferUpdatePrice
                 'Accept'       => 'application/vnd.retailer.v10+json',
                 'Content-Type' => 'application/vnd.retailer.v10+json',
             ],
-            'json' => ['bundlePrices' => $bundlePrices],
+            'json' => [
+                'pricing' => [
+                    'bundlePrices' => $bundlePrices
+                ]
+            ],
         ]);
 
         $data = json_decode((string)$res->getBody(), true);

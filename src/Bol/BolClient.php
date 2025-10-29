@@ -4,7 +4,6 @@ declare(strict_types=1);
 namespace App\Bol;
 
 use GuzzleHttp\Client;
-use GuzzleHttp\Exception\GuzzleException;
 use App\Config\Config;
 use Psr\Log\LoggerInterface;
 
@@ -15,7 +14,6 @@ final class BolClient
     private string $authBase;
     private string $cacheFile;
     private ?LoggerInterface $logger = null;
-
 
     public function __construct(?Client $http = null, ?LoggerInterface $logger = null)
     {
@@ -33,6 +31,7 @@ final class BolClient
         if (array_key_exists('json', $options) && $options['json'] === null) {
             unset($options['json']);
         }
+
         $baseHeaders = [
             'Authorization' => 'Bearer ' . $token,
         ];
@@ -41,8 +40,7 @@ final class BolClient
         $finalHeaders = $callerHeaders + $baseHeaders;
 
         foreach ($finalHeaders as $k => $v) {
-            if ($v === null)
-                unset($finalHeaders[$k]);
+            if ($v === null) unset($finalHeaders[$k]);
         }
 
         $opts = $options;
@@ -58,47 +56,80 @@ final class BolClient
             ]);
         }
 
-        try {
-            return $this->http->request($method, $this->apiBase . $path, $opts);
-        } catch (\GuzzleHttp\Exception\RequestException $e) {
-            $status = $e->getCode();
-            $body = $e->hasResponse() ? (string) $e->getResponse()->getBody() : '';
-            $shortBody = substr($body, 0, 500);
+        // --- BEGIN retry wrapper ---
+        $retries = (int)($options['retries'] ?? 3);
+        $delayMs = (int)($options['retry_delay_ms'] ?? 250);
 
-            $isDebug = $this->logger && method_exists($this->logger, 'isHandling') && $this->logger->isHandling(\Monolog\Logger::DEBUG);
+        for ($attempt = 0; $attempt <= $retries; $attempt++) {
+            try {
+                return $this->http->request($method, $this->apiBase . $path, $opts);
+            } catch (\GuzzleHttp\Exception\RequestException $e) {
+                $code = $e->getResponse()?->getStatusCode() ?? 0;
 
-            $logBody = $isDebug ? $body : $shortBody;
+                // Retry on rate-limit or transient server errors
+                $retryable = in_array($code, [429, 500, 502, 503, 504], true);
+                if ($retryable && $attempt < $retries) {
+                    $retryAfter = (int)($e->getResponse()?->getHeaderLine('Retry-After') ?? 0);
+                    $sleepMs = $retryAfter > 0 ? $retryAfter * 1000 : $delayMs * ($attempt + 1);
+                    if ($this->logger) {
+                        $this->logger->warning('BOL transient error, retrying', [
+                            'code' => $code,
+                            'attempt' => $attempt + 1,
+                            'sleep_ms' => $sleepMs,
+                            'path' => $path,
+                        ]);
+                    }
+                    usleep($sleepMs * 1000);
+                    continue;
+                }
 
-            if ($isDebug) {
-                //Attach full request to $logBody
-                $request = $e->getRequest();
-                $requestBody = (string) $request->getBody();
-                $logBody = "Request: {$requestBody}\nResponse: {$logBody}";
+                // --- Detailed logging on error ---
+                $status = $code;
+                $body = $e->hasResponse() ? (string)$e->getResponse()->getBody() : '';
+                $decoded = json_decode($body, true);
+                $prettyJson = $decoded ? json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) : null;
+
+                $isDebug = $this->logger && (
+                    method_exists($this->logger, 'isHandling')
+                        ? $this->logger->isHandling(\Monolog\Logger::DEBUG)
+                        : true
+                );
+
+                $logBody = $isDebug ? ($prettyJson ?? $body) : substr($body, 0, 500);
+
+                // Include request body when debugging
+                if ($isDebug && $e->getRequest()) {
+                    $reqBody = (string)$e->getRequest()->getBody();
+                    $logBody = "Request: {$reqBody}\nResponse: {$logBody}";
+                }
+
+                if ($this->logger) {
+                    $this->logger->error('BOL API error', [
+                        'method' => $method,
+                        'path' => $path,
+                        'status' => $status,
+                        'body' => $logBody,
+                    ]);
+                }
+
+                throw new \RuntimeException(
+                    "BOL API error {$status} {$method} {$path}\n{$logBody}",
+                    $status,
+                    $e
+                );
             }
-
-            if ($this->logger) {
-                $this->logger->error('BOL API error', [
-                    'method' => $method,
-                    'path' => $path,
-                    'status' => $status,
-                    'body' => $isDebug ? json_decode($logBody, true) ?? $logBody : $logBody,
-                ]);
-            }
-
-            throw new \RuntimeException(
-                "BOL API error {$status} {$method} {$path}\n{$logBody}",
-                $status,
-                $e
-            );
         }
+
+        // Should never reach here
+        throw new \RuntimeException('Unreachable after retry attempts');
     }
 
     private function getAccessToken(): string
     {
         // try cache
         if (is_file($this->cacheFile)) {
-            $data = json_decode((string) file_get_contents($this->cacheFile), true);
-            if (is_array($data) && isset($data['access_token'], $data['expires_at']) && time() < (int) $data['expires_at'] - 30) {
+            $data = json_decode((string)file_get_contents($this->cacheFile), true);
+            if (is_array($data) && isset($data['access_token'], $data['expires_at']) && time() < (int)$data['expires_at'] - 30) {
                 return $data['access_token'];
             }
         }
@@ -114,7 +145,7 @@ final class BolClient
             'form_params' => ['grant_type' => 'client_credentials'],
         ]);
 
-        $json = json_decode((string) $res->getBody(), true);
+        $json = json_decode((string)$res->getBody(), true);
         if (!isset($json['access_token'], $json['expires_in'])) {
             throw new \RuntimeException('Could not get bol access token');
         }
@@ -122,7 +153,7 @@ final class BolClient
         @mkdir(dirname($this->cacheFile), 0777, true);
         file_put_contents($this->cacheFile, json_encode([
             'access_token' => $json['access_token'],
-            'expires_at' => time() + (int) $json['expires_in'],
+            'expires_at' => time() + (int)$json['expires_in'],
         ]));
 
         return $json['access_token'];

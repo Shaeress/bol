@@ -1,4 +1,5 @@
 <?php
+// Don't use this class, just use an OfferUpsertBatch with one EAN instead.
 declare(strict_types=1);
 
 namespace App\Tasks\BolSubtasks\Offer;
@@ -32,7 +33,7 @@ final class OfferUpsert
             }
 
             // check map for existing offerId
-            $m = $pdo->prepare('SELECT offer_id, last_price, last_stock FROM bol_offer_map WHERE ean = ?');
+            $m = $pdo->prepare('SELECT offer_id, last_price, last_stock, on_hold, fulfilment FROM bol_offer_map WHERE ean = ?');
             $m->execute([$ean]);
             $map = $m->fetch(PDO::FETCH_ASSOC);
 
@@ -46,13 +47,6 @@ final class OfferUpsert
                     'data'   => $offerPayload,
                     'ean'    => $ean, // propagate EAN downstream
                 ]);
-
-                // mark as success (we at least queued it properly)
-                $this->queue->enqueue('bol.request', [
-                    'action' => 'offer.sync.success',
-                    'ean'    => $ean,
-                ]);
-
                 return;
             }
 
@@ -99,12 +93,6 @@ final class OfferUpsert
                 ]);
             }
 
-            // record local success after enqueueing all subtasks
-            $this->queue->enqueue('bol.request', [
-                'action' => 'offer.sync.success',
-                'ean'    => $ean,
-            ]);
-
         } catch (\Throwable $e) {
             $log->error('Offer upsert failed', [
                 'ean'   => $ean,
@@ -112,11 +100,7 @@ final class OfferUpsert
             ]);
 
             // record sync error
-            $this->queue->enqueue('bol.request', [
-                'action' => 'offer.sync.error',
-                'ean'    => $ean,
-                'error'  => $e->getMessage(),
-            ]);
+            \App\Support\SyncTracker::markError($ean, $e->getMessage());
 
             // Optionally rethrow if you want retry logic to handle it
             // throw $e;

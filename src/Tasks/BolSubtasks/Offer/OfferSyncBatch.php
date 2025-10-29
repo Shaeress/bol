@@ -20,6 +20,7 @@ final class OfferSyncBatch
 		$brands = $task->payload['brands'] ?? ['002', '003', '004', '005', '274'];
 		$seasons = $task->payload['seasons'] ?? ['251', '252', '999'];
 		$prefix = $task->payload['prefix'] ?? '/retailer';
+		$limit = max(1, (int) ($task->payload['limit'] ?? 100));
 
 		if (empty($brands) || empty($seasons)) {
 			throw new \RuntimeException('Missing or empty brands or seasons list');
@@ -32,18 +33,18 @@ final class OfferSyncBatch
 		$seasonPlaceholders = implode(',', array_fill(0, count($seasons), '?'));
 
 		$sql = "
-			SELECT s.ean, s.brand, s.season
+			SELECT s.ean, s.brand_id, s.season
 			FROM bol_stg_offers AS s
 			LEFT JOIN bol_content_sync AS cs ON cs.ean = s.ean
-			WHERE s.brand IN ($brandPlaceholders)
+			WHERE s.brand_id IN ($brandPlaceholders)
 			  AND s.season IN ($seasonPlaceholders)
 			  AND (cs.status IS NULL OR cs.status IN ('pending','error'))
 			ORDER BY
-			  (cs.last_synced_at IS NOT NULL) ASC,
+			  (cs.last_synced_at IS NULL) DESC,
 			  cs.last_synced_at ASC,
 			  cs.retry_count ASC,
 			  s.ean ASC
-			LIMIT 3
+			LIMIT $limit
 		";
 
 		$stmt = $pdo->prepare($sql);
@@ -55,33 +56,18 @@ final class OfferSyncBatch
 			return;
 		}
 
-		foreach ($rows as $row) {
-			$ean = $row['ean'];
-			$brandId = $row['brand'];
-			$seasonId = $row['season'];
-
-			// mark as in progress
-			$pdo->prepare("
-                INSERT INTO bol_content_sync (ean, brand_id, season_id, status, last_synced_at)
-                VALUES (?, ?, ?, 'in_progress', NOW())
-                ON DUPLICATE KEY UPDATE
-                    status='in_progress',
-                    retry_count = retry_count + 1,
-                    last_synced_at = NOW()
-            ")->execute([$ean, $brandId, $seasonId]);
-
-			// enqueue the upsert
-			$this->queue->enqueue('bol.request', [
-				'action' => 'offer.upsert',
-				'ean' => $ean,
-				'prefix' => $prefix,
-			]);
+		$eans = [];
+		foreach ($rows as $r) {
+			$eans[] = $r['ean'];
+			\App\Support\SyncTracker::markInProgress($r['ean'], (int) $r['brand_id'], (int) $r['season']);
 		}
 
-		$log->info('Queued offers for sync', [
-			'count' => count($rows),
-			'brands' => $brands,
-			'seasons' => $seasons,
+		$this->queue->enqueue('bol.request', [
+			'action' => 'offer.upsert.batch',
+			'eans' => $eans,
+			'prefix' => $prefix,
 		]);
+
+		$log->info('Queued upsert batch', ['count' => count($eans)]);
 	}
 }

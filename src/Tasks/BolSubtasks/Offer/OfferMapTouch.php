@@ -22,6 +22,8 @@ final class OfferMapTouch
         $pdo = PdoFactory::make();
         $stmt = $pdo->prepare($sql);
         $stmt->execute($vals);
+
+        \App\Support\SyncTracker::markSuccess($ean);
         
         $affectedRows = $stmt->rowCount();
         return "Updated {$affectedRows} offer mapping(s) for EAN: {$ean}";

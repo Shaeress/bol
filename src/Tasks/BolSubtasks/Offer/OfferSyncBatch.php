@@ -41,11 +41,20 @@ final class OfferSyncBatch
 			LEFT JOIN bol_content_sync AS cs ON cs.ean = s.ean
 			WHERE s.brand_id IN ($brandPlaceholders)
 			  AND s.season IN ($seasonPlaceholders)
-			  AND (cs.status IS NULL OR cs.status IN ('pending','error'))
+			  AND (cs.status IS NULL 
+			       OR cs.status = 'pending' 
+			       OR (cs.status = 'error' AND (cs.retry_count IS NULL OR cs.retry_count < 5))
+			       OR cs.status = 'success')
 			ORDER BY
-			  (cs.last_synced_at IS NULL) DESC,
-			  cs.last_synced_at ASC,
+			  CASE 
+			    WHEN cs.last_synced_at IS NULL THEN 1
+			    WHEN cs.status = 'pending' THEN 2
+			    WHEN cs.status = 'error' AND (cs.retry_count IS NULL OR cs.retry_count < 5) THEN 3
+			    WHEN cs.status = 'success' THEN 4
+			    ELSE 5
+			  END,
 			  cs.retry_count ASC,
+			  cs.last_synced_at ASC,
 			  s.ean ASC
 			LIMIT $limit OFFSET $offset
 		";
@@ -55,7 +64,7 @@ final class OfferSyncBatch
 		$rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 		if (!$rows) {
-			$log->info('No offers found to sync', [
+			$log->info('No offers found to sync or re-sync', [
 				'brands' => $brands, 
 				'seasons' => $seasons, 
 				'offset' => $offset,

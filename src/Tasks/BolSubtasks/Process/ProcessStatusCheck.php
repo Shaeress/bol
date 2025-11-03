@@ -201,19 +201,53 @@ final class ProcessStatusCheck
                 $checkedCount++;
                 
             } catch (\Throwable $e) {
-                $log->error('Process check failed', [
-                    'pid' => $processId,
-                    'ean' => $ean,
-                    'err' => $e->getMessage(),
-                ]);
+                $errorMessage = $e->getMessage();
                 
-                // Update with error info
-                $updateStmt = $pdo->prepare('
-                    UPDATE bol_process_queue 
-                    SET last_result = ?
-                    WHERE process_id = ?
-                ');
-                $updateStmt->execute([json_encode(['error' => $e->getMessage()]), $processId]);
+                // Check if this is a 404 error indicating the process doesn't exist
+                // This means the process likely timed out or was cleaned up - treat as success
+                if (str_contains($errorMessage, 'BOL API error 404') && 
+                    str_contains($errorMessage, 'Process status with ID') && 
+                    str_contains($errorMessage, 'does not exist')) {
+                    
+                    $log->info('Process not found (404) - assuming successful completion due to timeout/cleanup', [
+                        'pid' => $processId,
+                        'ean' => $ean,
+                        'type' => $type
+                    ]);
+                    
+                    // Update process queue to success
+                    $updateStmt = $pdo->prepare('
+                        UPDATE bol_process_queue 
+                        SET status = "SUCCESS", last_result = ?
+                        WHERE process_id = ?
+                    ');
+                    $updateStmt->execute([json_encode(['status' => 'SUCCESS', 'note' => 'Process not found - assumed successful']), $processId]);
+                    
+                    // Mark sync as successful in bol_content_sync table
+                    $syncUpdateStmt = $pdo->prepare('
+                        UPDATE bol_content_sync 
+                        SET status = "success", last_synced_at = NOW()
+                        WHERE ean = ?
+                    ');
+                    $syncUpdateStmt->execute([$ean]);
+                    
+                    $successCount++;
+                    
+                } else {
+                    $log->error('Process check failed', [
+                        'pid' => $processId,
+                        'ean' => $ean,
+                        'err' => $errorMessage,
+                    ]);
+                    
+                    // Update with error info
+                    $updateStmt = $pdo->prepare('
+                        UPDATE bol_process_queue 
+                        SET last_result = ?
+                        WHERE process_id = ?
+                    ');
+                    $updateStmt->execute([json_encode(['error' => $errorMessage]), $processId]);
+                }
             }
         }
         

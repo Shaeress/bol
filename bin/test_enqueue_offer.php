@@ -18,10 +18,15 @@ $driver = strtolower(Config::get('QUEUE_DRIVER', 'file'));
 $q = $driver === 'db' ? new DbQueue(PdoFactory::make())
                       : new FileQueue(Config::get('QUEUE_DIR', __DIR__ . '/../var/queue'));
 
-// pick an endpoint you can call with your role, for example process status list or orders
+// Enqueue test offer upsert batch request
 $id = $q->enqueue('bol.request', [
-    'action' => 'offer.sync.batch',
-    'limit' => 1
+    'eans' => ['5400977000013'],
+    'action' => 'offer.upsert.batch',
+    'prefix' => '/retailer'
 ]);
 
-echo "Enqueued bol.request {$id}\n";
+echo "Test offer upsert enqueued with ID: {$id}\n";
+echo "EAN: 5400977000013\n";
+echo "Action: offer.upsert.batch\n";
+echo "Prefix: /retailer\n";
+echo "\nYou can monitor the worker log and check queue status to see the processing.\n";
